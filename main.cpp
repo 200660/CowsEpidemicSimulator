@@ -5,6 +5,7 @@
 #include <limits>
 #include <cmath>
 #include <cstdio>
+#include <random>
 
 #include "mysql_connection.h"
 
@@ -24,11 +25,160 @@ inline void mysleep(unsigned millis) {
 
 using namespace std;
 
+const map<int, string> col
+{
+	{0, "red"},
+	{1, "blue"},
+	{2, "green"},
+	{3, "black"}
+};
+
+class Point
+{
+public:
+	int x;
+	int y;
+
+	Point(){};
+
+	Point(int x, int y)
+	{
+		this->x = x;
+		this->y = y;
+	}
+
+	bool isSame(Point & p)
+	{
+		return this->x == p.x and this->y == p.y;
+	}
+};
+
+class Cow
+{
+public:
+	Point position;
+	Point target;
+	vector<Point> way;
+	unsigned int waypoint = 0; // number of point form from way list
+};
+
+void line(Point & start, Point & target, vector<Point>& way) 
+{
+	double deltaX = target.x - start.x;
+	double deltaY = target.y - start.y;
+	double growth = 0;
+	double deltaGrowth = (deltaX != 0 ? abs(deltaY / deltaX) : 1);
+	auto x = start.x;
+	auto y = start.y;
+	way.push_back(start);
+	do
+	{
+		x += (start.x < target.x ? 1 : -1);
+		growth += deltaGrowth;
+		if (growth >= 0.5)
+		{
+			y += (start.y < target.y ? 1 : -1);
+			--growth;
+		}
+
+		Point temp(x,y);
+		way.push_back(temp);
+	} while (x != target.x);
+}
+
+size_t get_seed() {
+    random_device entropy;
+    return entropy();
+}
+
+void experiment(const int cowsNumber, int duration /*in seconds*/)
+{
+	Gnuplot gp;
+	gp << "set xrange [0:4000]\n";
+	gp << "set yrange [0:1750]\n";
+	vector<Cow> cows(cowsNumber);
+	uniform_int_distribution<default_random_engine::result_type> xDist(0, 4000);
+	uniform_int_distribution<default_random_engine::result_type> yDist(0, 1750);
+	uniform_int_distribution<default_random_engine::result_type> speedDist(11, 23);
+
+	default_random_engine xEngine;
+	default_random_engine yEngine;
+	default_random_engine speedEngine;
+
+	default_random_engine::result_type const xSeed = get_seed();
+	default_random_engine::result_type const ySeed = get_seed();
+	default_random_engine::result_type const speedSeed = get_seed();
+
+	xEngine.seed(xSeed);
+	yEngine.seed(ySeed);
+	speedEngine.seed(speedSeed);
+
+	auto xGen = bind(xDist, xEngine);
+	auto yGen = bind(yDist, yEngine);
+	auto speedGen = bind(speedDist, speedEngine);
+
+	for (auto i = 0; i < cowsNumber; i++)
+	{
+		cows[i].position.x = xGen();
+		cows[i].position.y = yGen();
+		//cout << i << " position: " << cows[i].position.x << ", " << cows[i].position.y << endl;
+		cows[i].target.x = cows[i].position.x;
+		cows[i].target.y = cows[i].position.y;
+	}
+
+	for (int j = 0; j < duration; j++)
+	{
+		string command = "plot";
+		for (int i = 0; i < cowsNumber; i++)
+		{
+			if (cows[i].target.isSame(cows[i].position))
+			{
+				cows[i].target.x = xGen();
+				cows[i].target.y = yGen();
+				cows[i].way.clear();
+				cows[i].waypoint = 0;
+				line(cows[i].position, cows[i].target, cows[i].way);
+				//cout << i << " target: " << cows[i].target.x << ", " << cows[i].target.y << endl;
+			}
+
+			unsigned int speed = speedGen();
+			if (i == 0)
+			{
+				cout << " 0 speed: " << speed << endl;
+			}
+			cows[i].waypoint += speed;
+			if (cows[i].waypoint + 1 >= cows[i].way.size())
+			{
+				// check first if point is free
+				cows[i].position.x = cows[i].target.x;
+				cows[i].position.y = cows[i].target.y;
+			}
+			else
+			{
+				// check first if point is free
+				cows[i].position.x = cows[i].way[cows[i].waypoint].x;
+				cows[i].position.y = cows[i].way[cows[i].waypoint].y;
+			}
+			command = command + " '-' with point lc \"" + col.at(i) + "\" notitle,";
+		}
+
+		gp << command + "\n";
+		for (int i = 0; i < cowsNumber; i++)
+		{
+			vector<pair<double, double>> pts;
+			pts.push_back(make_pair(double(cows[i].position.x), double(cows[i].position.y)));
+			gp.send1d(pts);
+		}
+		gp.flush();
+		mysleep(60);
+	}
+}
+
 void animation(const char * path) {
 	Gnuplot gp;
-	std::vector<std::pair<double, double>> pts1;
-	std::vector<std::pair<double, double>> pts2;
-	std::vector<std::pair<double, double>>::iterator it;
+	vector<pair<double, double>> pts1;
+	vector<pair<double, double>> pts2;
+	vector<pair<double, double>>::iterator it;
 
 	try {
 		sql::Driver *driver;
@@ -36,6 +186,13 @@ void animation(const char * path) {
 		sql::Statement *stmt;
 		sql::ResultSet *res;
 		string pass;
+		// double sum = 0.0;
+		// double max = 0.0;
+		// double min = 17.0;
+		// double prevX = 0.0;
+		// double prevY = 0.0;
+		// double count = 0;
+		// bool isFirst = true;
 
 		gp << "set xrange [-3000:5200]\n";
 		gp << "set yrange [-2600:1750]\n";
@@ -55,7 +212,8 @@ void animation(const char * path) {
 		con->setSchema("rtls");
 
 		stmt = con->createStatement();
-		res = stmt->executeQuery("SELECT x, y, tagId from tagi");
+		res = stmt->executeQuery("SELECT x, y from tagi where tagId=2605893136767365736");
+
 		while (res->next()) {
 			/* Access column data by alias or column name */
 			// cout << res->getDouble("x") << endl;
@@ -65,28 +223,52 @@ void animation(const char * path) {
 			// {
 			// 	pts.pop_back();
 			// }
-			if (res->getString("tagId") == "2605893136767365736")
-			{
-				pts1.push_back(make_pair(res->getDouble("x"), res->getDouble("y")));
-			}
+			// if (res->getString("tagId") == "2605893136767365736")
+			// {
+			//	pts1.push_back(make_pair(res->getDouble("x"), res->getDouble("y")));
+			// }
 			// else if (res->getString("tagId") == "2605893145357300288")
 			// {
 			// 	pts2.push_back(make_pair(res->getDouble("x"), res->getDouble("y")));
 			// }
 
+			///Rysowanie krok po kroku/////////////////////////////////
 			// gp << "set title \"" + res->getString("tagTime") + "\"\n";
-			// gp << "plot '-' with points title 'cubic'\n";
+			// gp << "plot '-' with line title 'cubic'\n";
 			// gp.send1d(pts);
 			// gp.flush();
 			// mysleep(10);
+			
+			///////////////////////////////////////////////////////////
+			// if (!isFirst)
+			// {
+			// 	auto x = abs(prevX - res->getDouble("x"));
+			// 	auto y = abs(prevY - res->getDouble("y"));
+			// 	auto sq = sqrt(x*x+y*y);
+			// 	if (sq > max) max = sq;
+			// 	if (sq < min) min = sq;
+			// 	sum += sq;
+			// 	count++;
+			// }
+			// else
+			// {
+			// 	isFirst = false;
+			// }
+			// prevX = res->getDouble("x");
+			// prevY = res->getDouble("y");
 		}
 		delete res;
 		delete stmt;
 		delete con;
-		gp << "plot '-' with points lc \"red\" notitle\n";//, '-' with points lc \"blue\" notitle\n";
-		gp.send1d(pts1);
-		//gp.send1d(pts2);
-		gp.flush();
+
+		// cout << "avg: " << sum/count << endl;
+		// cout << "min: " << min << endl;
+		// cout << "max: " << max << endl;
+
+		// gp << "plot '-' with line lc \"red\" notitle\n";//, '-' with line lc \"blue\" notitle\n";
+		// gp.send1d(pts1);
+		// gp.send1d(pts2);
+		// gp.flush();
 
 	} catch (sql::SQLException &e) {
 		cout << "# ERR: SQLException in " << __FILE__;
@@ -97,6 +279,7 @@ void animation(const char * path) {
 		cout << ", SQLState: " << e.getSQLState() << " )" << endl;
 	}
 
+	// oryginalny przykład z gnuplot //////////////////////////////////
 	// cout << "Press Ctrl-C to quit (closing gnuplot window doesn't quit)." << endl;
 
 	// gp << "set title \"CowsTracker\"\n";
@@ -123,7 +306,7 @@ void animation(const char * path) {
 	// }
 }
 
-int main(int argc, char **argv)
+int main(/*int argc, char **argv*/)
 {
 	// igraph_t graph;
 	// igraph_vector_t v;
@@ -161,10 +344,12 @@ int main(int argc, char **argv)
 	// igraph_vector_destroy(&result);
 	// igraph_destroy(&graph);
 
-	if (argc == 2)
-	{
-		animation(argv[1]);
-		return 0;
-	}
-	return 1;
+	// if (argc == 2)
+	// {
+	// 	animation(argv[1]);
+	// 	return 0;
+	// }
+
+	experiment(4, 600);
+	return 0;
 }
