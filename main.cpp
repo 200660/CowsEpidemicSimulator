@@ -25,156 +25,457 @@ inline void mysleep(unsigned millis) {
 
 using namespace std;
 
+// useful to draw points in different
 const map<int, string> col
 {
 	{0, "red"},
 	{1, "blue"},
 	{2, "green"},
-	{3, "black"}
+	{3, "black"},
+	{4, "orange"},
+	{5, "purple"}
 };
 
-class Point
+enum class State
 {
-public:
-	int x;
-	int y;
-
-	Point(){};
-
-	Point(int x, int y)
-	{
-		this->x = x;
-		this->y = y;
-	}
-
-	bool isSame(Point & p)
-	{
-		return this->x == p.x and this->y == p.y;
-	}
+	Susceptible,
+	Infectious,
+	Removed,
+	Recovered
 };
 
-class Cow
+using Point = pair<double, double>;
+using Distribution = uniform_int_distribution<default_random_engine::result_type>;
+using GenPair = pair<Distribution, default_random_engine>;
+using Generator = std::_Bind_helper<false, Distribution &, std::default_random_engine &>::type;
+using BernoulliGen = std::_Bind_helper<false, std::bernoulli_distribution &, std::mt19937 &>::type;
+
+struct Cow
 {
-public:
 	Point position;
 	Point target;
 	vector<Point> way;
-	unsigned int waypoint = 0; // number of point form from way list
-};
+	unsigned int waypoint = 0; // number of current point from the way vector
+	unsigned int stayTime = 0;
+	State state = State::Susceptible;
+	double exposition = 1.0;
+	unsigned int infectionTime;
+	double infectionTendency = 1.0;
+	bool isInRange = false;
 
-void line(Point & start, Point & target, vector<Point>& way) 
-{
-	double deltaX = target.x - start.x;
-	double deltaY = target.y - start.y;
-	double growth = 0;
-	double deltaGrowth = (deltaX != 0 ? abs(deltaY / deltaX) : 1);
-	auto x = start.x;
-	auto y = start.y;
-	way.push_back(start);
-	do
+	void clear()
 	{
-		x += (start.x < target.x ? 1 : -1);
-		growth += deltaGrowth;
-		if (growth >= 0.5)
-		{
-			y += (start.y < target.y ? 1 : -1);
-			--growth;
-		}
-
-		Point temp(x,y);
-		way.push_back(temp);
-	} while (x != target.x);
-}
-
-size_t get_seed() {
-    random_device entropy;
-    return entropy();
-}
-
-void experiment(const int cowsNumber, int duration /*in seconds*/)
-{
-	Gnuplot gp;
-	gp << "set xrange [0:4000]\n";
-	gp << "set yrange [0:1750]\n";
-	vector<Cow> cows(cowsNumber);
-	uniform_int_distribution<default_random_engine::result_type> xDist(0, 4000);
-	uniform_int_distribution<default_random_engine::result_type> yDist(0, 1750);
-	uniform_int_distribution<default_random_engine::result_type> speedDist(11, 23);
-
-	default_random_engine xEngine;
-	default_random_engine yEngine;
-	default_random_engine speedEngine;
-
-	default_random_engine::result_type const xSeed = get_seed();
-	default_random_engine::result_type const ySeed = get_seed();
-	default_random_engine::result_type const speedSeed = get_seed();
-
-	xEngine.seed(xSeed);
-	yEngine.seed(ySeed);
-	speedEngine.seed(speedSeed);
-
-	auto xGen = bind(xDist, xEngine);
-	auto yGen = bind(yDist, yEngine);
-	auto speedGen = bind(speedDist, speedEngine);
-
-	for (auto i = 0; i < cowsNumber; i++)
-	{
-		cows[i].position.x = xGen();
-		cows[i].position.y = yGen();
-		//cout << i << " position: " << cows[i].position.x << ", " << cows[i].position.y << endl;
-		cows[i].target.x = cows[i].position.x;
-		cows[i].target.y = cows[i].position.y;
+		way.clear();
+		waypoint = 0;
+		state = State::Susceptible;
+		exposition = 1.0;
+		infectionTendency = 1.0;
+		isInRange = false;
 	}
 
-	for (int j = 0; j < duration; j++)
+	void print()
 	{
-		string command = "plot";
-		for (int i = 0; i < cowsNumber; i++)
-		{
-			if (cows[i].target.isSame(cows[i].position))
-			{
-				cows[i].target.x = xGen();
-				cows[i].target.y = yGen();
-				cows[i].way.clear();
-				cows[i].waypoint = 0;
-				line(cows[i].position, cows[i].target, cows[i].way);
-				//cout << i << " target: " << cows[i].target.x << ", " << cows[i].target.y << endl;
-			}
+	 	cout << "position: " << position.first << ", " << position.second << endl \
+	 		 << "target: " << target.first << ", " << target.second  << endl \
+	 		 << way[waypoint].first << ", " << way[waypoint].second << endl \
+	 		 << "waypoint: " << waypoint << endl \
+	 		 << "stayTime: " << stayTime << endl << endl;
+	}
+};
 
-			unsigned int speed = speedGen();
-			if (i == 0)
+struct Illness
+{
+	double infectionRate;
+	double recoverRate;
+	unsigned int infectionRange;
+	unsigned int infectionDuration = 172800;
+
+	string print()
+	{
+		return string(to_string(infectionRate) + " " + to_string(recoverRate) + " " + to_string(infectionRange));
+	}
+};
+
+struct Clock
+{
+	unsigned int day = 1;
+	unsigned int hours = 6;
+	unsigned int minutes = 0;
+	unsigned int seconds = 0;
+
+	void tick()
+	{
+		seconds++;
+		if (seconds == 60)
+		{
+			seconds = 0;
+			minutes++;
+			if (minutes == 60)
 			{
-				cout << " 0 speed: " << speed << endl;
+				minutes = 0;
+				hours++;
+				if (hours == 24)
+				{
+					hours = 0;
+					day++;
+				}
 			}
-			cows[i].waypoint += speed;
+		}
+	}
+	
+	bool isSleepTime()
+	{
+		return (hours >= 20 or hours < 6);
+	}
+
+	string to_string()
+	{
+		return string(std::to_string(day) + ":" + std::to_string(hours) + ":" + string((minutes < 10) ? "0" : "") + std::to_string(minutes)
+					+ ":" + ((seconds < 10) ? "0" : "") + std::to_string(seconds) + (isSleepTime() ? " - sleep" : " - day"));
+	}
+};
+
+// algorithm based on Bresenham's line algorithm
+void line(const Point & start, const Point & target, vector<Point>& way)
+{
+	double x = start.first;
+	double y = start.second;
+	double xDelta = abs(target.first - start.first);
+	double yDelta = abs(target.second - start.second);
+	auto deltasDiff = abs(yDelta - xDelta) * (-2);
+
+	way.push_back(start);
+
+	// 0X is main
+	if (xDelta > yDelta)
+	{
+		auto bi = yDelta * 2;
+		auto delta = bi - xDelta;
+		while (x != target.first)
+		{
+			if (delta >= 0)
+			{
+				x += start.first < target.first ? 1 : -1;
+				y += start.second < target.second ? 1 : -1;
+				delta += deltasDiff;
+			}
+			else
+			{
+				x += start.first < target.first ? 1 : -1;
+				delta += bi;
+			}
+			way.push_back(make_pair(x, y));
+		}
+	}
+	// 0Y is main
+	else
+	{
+		auto bi = xDelta * 2;
+		auto delta = bi - yDelta;
+		while (y != target.second)
+		{
+			if (delta >= 0)
+			{
+				x += start.first < target.first ? 1 : -1;
+				y += start.second < target.second ? 1 : -1;
+				delta += deltasDiff;
+			}
+			else
+			{
+				y += start.second < target.second ? 1 : -1;
+				delta += bi;
+			}
+			way.push_back(make_pair(x, y));
+		}
+	}
+}
+
+void initialize(vector<Cow> & cows, Generator & xGen, Generator & yGen)
+{
+	for (unsigned i = 0; i < cows.size(); i++)
+	{
+		cows[i].position.first = xGen();
+		cows[i].position.second = yGen();
+		//cout << i << " position: " << cows[i].position.first << ", " << cows[i].position.second << endl;
+		cows[i].target.first = xGen();
+		cows[i].target.second = yGen();
+		line(cows[i].position, cows[i].target, cows[i].way);
+		// cows[i].print();
+	}
+}
+
+size_t get_seed()
+{
+	random_device entropy;
+	return entropy();
+}
+
+void moveCows(vector<Cow> & cows, Generator & xGen, Generator & yGen,
+				Generator & speedGen, Generator & stayGen/*, string & command*/)
+{
+
+
+	for (unsigned i = 0; i < cows.size(); i++)
+	{
+		if (cows[i].state == State::Removed)
+		{
+			continue;
+		}
+
+		if (cows[i].target == cows[i].position)
+		{
+			cows[i].target.first = xGen();
+			cows[i].target.second = yGen();
+			cows[i].way.clear();
+			cows[i].waypoint = 0;
+			line(cows[i].position, cows[i].target, cows[i].way);
+			cows[i].stayTime = stayGen();
+			//cout << i << " target: " << cows[i].target.first << ", " << cows[i].target.second << endl;
+		}
+
+		if (cows[i].stayTime == 0)
+		{
+			cows[i].waypoint += speedGen();
 			if (cows[i].waypoint + 1 >= cows[i].way.size())
 			{
 				// check first if point is free
-				cows[i].position.x = cows[i].target.x;
-				cows[i].position.y = cows[i].target.y;
+				cows[i].position.first = cows[i].target.first;
+				cows[i].position.second = cows[i].target.second;
+				cows[i].waypoint = cows[i].way.size() - 1;
 			}
 			else
 			{
 				// check first if point is free
-				cows[i].position.x = cows[i].way[cows[i].waypoint].x;
-				cows[i].position.y = cows[i].way[cows[i].waypoint].y;
+				cows[i].position.first = cows[i].way[cows[i].waypoint].first;
+				cows[i].position.second = cows[i].way[cows[i].waypoint].second;
 			}
-			command = command + " '-' with point lc \"" + col.at(i) + "\" notitle,";
 		}
-
-		gp << command + "\n";
-		for (int i = 0; i < cowsNumber; i++)
+		else
 		{
-			vector<pair<double, double>> pts;
-			pts.push_back(make_pair(double(cows[i].position.x), double(cows[i].position.y)));
-			gp.send1d(pts);
+			cows[i].stayTime -= 1;
 		}
-		gp.flush();
-		mysleep(60);
+		// cows[i].print();
+		// command = command + " '-' with point lc \"" + col.at(i) + "\" notitle,";
 	}
 }
 
-void animation(const char * path) {
+double getDistance(Cow & cow1, Cow & cow2)
+{
+	return sqrt(pow((cow1.position.first - cow2.position.first), 2) + pow((cow1.position.second - cow2.position.second), 2));
+}
+
+bool spreadDisease(vector<Cow> & cows, mt19937 & probabilityGen, Illness & illness/*, Clock & clock, int experimentNum*/)
+{
+	bool areAllRemoved = true;
+
+	for (unsigned i = 0; i < cows.size(); i++)
+	{
+		// cout << "cow#" << i << "" << endl;
+		// cout << 1 << " ";
+		if (cows[i].state == State::Infectious)
+		{
+			for (unsigned j = 0; j < cows.size(); j++)
+			{
+				auto distance = getDistance(cows[i], cows[j]);
+				// cout << i << " <-> " << j << " = " << distance << endl;
+				if ((cows[j].state == State::Susceptible) and (distance <= illness.infectionRange))
+				{
+					//cout << i << " <-> " << j << " = " << distance << endl;
+					cows[j].isInRange = true;
+					bernoulli_distribution probabilityDist(illness.infectionRate/* * cows[j].exposition*/);
+					//auto prob = double(probabilityGen())/10000.0;
+					//cout << i << " - " << j << " -> " << prob << endl;
+					if (probabilityDist(probabilityGen))
+					{
+						//cout << clock.to_string() << ": " << i << " - " << j << " -> " << prob << endl;
+						cows[j].state = State::Infectious;
+						cows[j].infectionTime = illness.infectionDuration;
+					}
+				}
+			}
+
+			// cout << 2 << " ";
+			cows[i].infectionTime -= 1;
+			if (cows[i].infectionTime == 0) 
+			{
+				// cout << 3 << " ";
+				if (double(probabilityGen())/10000.0 <= illness.recoverRate)
+				{
+					// cout << 4 << " ";
+					cows[i].state = State::Recovered;
+				}
+				else
+				{
+					// cout << 5 << " ";
+					cows[i].state = State::Removed;
+				}
+			}
+			else
+			{
+				areAllRemoved = false;
+			}
+			
+			// cout << endl;
+		}
+		else if (cows[i].state == State::Susceptible)
+		{
+			// cout << "not Susceptible" << endl;
+			areAllRemoved = false;
+		}
+	}
+
+	// if (experimentNum > 1)
+	// {
+	// 	for (unsigned i = 0; i < cows.size(); i++)
+	// 	{
+	// 		if (cows[i].isInRange)
+	// 		{
+	// 			cows[i].exposition += 0.1;
+	// 			cows[i].isInRange = false;
+	// 		}
+	// 		else
+	// 		{
+	// 			cows[i].exposition = 1.0;
+	// 		}
+	// 	}
+	// }
+
+	return areAllRemoved;
+}
+
+void experiment(const char * inputFile, int duration /*number corresponds to real days*/, int experimentNum)
+{
+	ifstream data;
+	data.open(inputFile);
+	if(data.good() != true)
+	{
+		cerr << "Data file is missing!" << endl;
+		return;
+	}
+
+	ofstream output;
+	string outputName = "output" + to_string(experimentNum);
+	output.open(outputName.c_str(), ios::out);
+	if(output.good() != true)
+	{
+		cerr << "Output file is missing!" << endl;
+		return;
+	}
+
+	// do
+	// {
+		string tmp;
+		data >> tmp;
+		unsigned int cowsNumber = stoi(tmp);
+		vector<Cow> cows(cowsNumber);
+
+		Illness illness;
+		data >> tmp;
+		illness.infectionRate = stod(tmp);
+		data >> tmp;
+		illness.recoverRate = stod(tmp);
+		data >> tmp;
+		illness.infectionRange = stod(tmp);
+		tmp = to_string(cowsNumber) + string(" ") + illness.print();
+
+
+		Distribution xDist(0, 4000);
+		default_random_engine xEngine;
+		// default_random_engine::result_type const xseed = get_seed();
+		// xEngine.seed(xseed);
+		auto xGen = bind(xDist, xEngine);
+
+		Distribution yDist(0, 1750);
+		default_random_engine yEngine;
+		// default_random_engine::result_type const yseed = get_seed();
+		// yEngine.seed(yseed);
+		auto yGen = bind(yDist, yEngine);
+
+		Distribution speedDist(11, 23);
+		default_random_engine speedEngine;
+		// default_random_engine::result_type const speedseed = get_seed();
+		// speedEngine.seed(speedseed);
+		auto speedGen = bind(speedDist, speedEngine);
+
+		Distribution stayDist(0, 1800);
+		default_random_engine stayEngine;
+		// default_random_engine::result_type const stayseed = get_seed();
+		// stayEngine.seed(stayseed);
+		auto stayGen = bind(stayDist, stayEngine);
+
+		random_device probabilityRD;
+		mt19937 probabilityEngine(probabilityRD());
+		//default_random_engine::result_type const probabilityseed = get_seed();
+		//probabilityEngine.seed(probabilityseed);
+		//auto probabilityGen = bind(probabilityDist, probabilityEngine);
+
+		// Gnuplot gp;
+		// gp << "set xrange [0:4000]\n";
+		// gp << "set yrange [0:1750]\n";
+
+		unsigned int rCows = 0;
+		unsigned int durationInSec = duration * 24 * 60 * 60;
+		unsigned int stopTime = 0;
+		for (size_t i = 0; i < 1; i++)
+		{
+			stopTime += durationInSec;
+			initialize(cows, xGen, yGen);
+			cows[0].state = State::Infectious;
+			cows[0].infectionTime = illness.infectionDuration;
+			Clock clock;
+			for (unsigned int j = 0; j < durationInSec; j++)
+			{
+				// cout << j << " ----------------------------------- " << endl;
+				//string command = "plot";
+
+				if (!clock.isSleepTime())
+				{
+					moveCows(cows, xGen, yGen, speedGen, stayGen/*, command*/);
+				}
+
+				if (spreadDisease(cows, probabilityEngine, illness/*, clock, experimentNum*/))
+				{
+					stopTime = stopTime - durationInSec + j;
+					break;
+				}
+
+				//cout << command + "\n";
+				// gp << "set title \"" + clock.to_string() + "\"\n";
+				// gp << command + "\n";
+				// for (size_t i = 0; i < cows.size(); i++)
+				// {
+				// 	vector<pair<double, double>> pts;
+				// 	pts.push_back(make_pair(double(cows[i].position.first), double(cows[i].position.second)));
+				// 	gp.send1d(pts);
+				// }
+				// gp.flush();
+				// mysleep(2);
+				clock.tick();
+			}
+
+			unsigned int r = 0;
+			for (size_t j = 0; j < cows.size(); j++)
+			{
+				if (cows[j].state == State::Recovered or cows[j].state == State::Removed)
+				{
+					r++;
+				}
+				cows[j].clear();
+			}
+			rCows += r;
+		}
+
+		tmp += " " + to_string(double(stopTime) / (30.0 * 30.0 * 3.0)) + " " + to_string(double(rCows)/3.0);
+		cout << tmp << endl;
+		//output << tmp << endl;
+	// } while (!data.eof());
+
+	data.close();
+	output.close();
+}
+
+void animation(const char * path)
+{
 	Gnuplot gp;
 	vector<pair<double, double>> pts1;
 	vector<pair<double, double>> pts2;
@@ -306,7 +607,7 @@ void animation(const char * path) {
 	// }
 }
 
-int main(/*int argc, char **argv*/)
+int main(int argc, char **argv)
 {
 	// igraph_t graph;
 	// igraph_vector_t v;
@@ -350,6 +651,53 @@ int main(/*int argc, char **argv*/)
 	// 	return 0;
 	// }
 
-	experiment(4, 600);
+	try
+	{
+		int c;
+		unsigned int experimentNum;
+		unsigned int duration = 0;
+		char * inputFile;
+		while ((c = getopt(argc, argv, "e:f:d:")) != -1)
+		switch (c)
+		{
+		case 'e':
+			experimentNum = stoi(optarg);
+			break;
+		case 'd':
+			duration = stoi(optarg);
+			break;
+		case 'f':
+			inputFile = optarg;
+			break;
+		default:
+			break;
+		}
+
+		experiment(inputFile, duration, experimentNum);
+	}
+	catch(const std::exception& e)
+	{
+		std::cerr << e.what() << '\n';
+		return 1;
+	}
+
+	// Point a(2000, 800);
+	// Point b(1900, 790);
+	// vector<Point> way;
+	// line(a,b,way);
+
+	// vector<pair<double, double>> pts;
+	// for (size_t i = 0; i < way.size(); i++)
+	// {
+	// 	pts.push_back(make_pair(way[i].first, way[i].second));
+	// }
+
+	// Gnuplot gp;
+	// gp << "set xrange [0:4000]\n";
+	// gp << "set yrange [0:1750]\n";
+	// gp << "plot '-' with points lc \"red\" notitle\n";
+	// gp.send1d(pts);
+	// gp.flush();
+
 	return 0;
 }
