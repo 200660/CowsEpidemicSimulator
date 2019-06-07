@@ -34,6 +34,7 @@ const map<int, string> color{
 enum class State
 {
 	Susceptible,
+	Exposed,
 	Infectious,
 	Removed,
 	Recovered
@@ -51,9 +52,9 @@ struct Cow
 	unsigned int stayTime = 0;
 	State state = State::Susceptible;
 	unsigned int infectionTime;
+	unsigned int incubationTime;
 	bool isInRange = false;
 	unsigned int exposition = 1;
-	double infectionImmunity = 1.0;
 
 	void clear()
 	{
@@ -61,7 +62,6 @@ struct Cow
 		waypoint = 0;
 		state = State::Susceptible;
 		exposition = 1.0;
-		infectionImmunity = 1.0;
 		isInRange = false;
 	}
 };
@@ -276,7 +276,7 @@ void line(const Point &start, const Point &target, vector<Point> &way)
 	}
 }
 
-void initialize(vector<Cow> &cows, Generator &xGen, Generator &yGen, Generator &immunityGen, int experimentNum)
+void initialize(vector<Cow> &cows, Generator &xGen, Generator &yGen)
 {
 	for (unsigned i = 0; i < cows.size(); i++)
 	{
@@ -285,10 +285,6 @@ void initialize(vector<Cow> &cows, Generator &xGen, Generator &yGen, Generator &
 		cows[i].target.first = xGen();
 		cows[i].target.second = yGen();
 		line(cows[i].position, cows[i].target, cows[i].way);
-		if (experimentNum == 4)
-		{
-			cows[i].infectionImmunity -= double(immunityGen()) / 10000.0;
-		}
 	}
 }
 
@@ -336,6 +332,7 @@ void moveCows(vector<Cow> &cows, Generator &xGen, Generator &yGen,
 			{
 				cows[i].waypoint += speedGen();
 			}
+
 			if (cows[i].waypoint + 1 >= cows[i].way.size())
 			{
 				cows[i].position.first = cows[i].target.first;
@@ -382,12 +379,21 @@ bool spreadDisease(vector<Cow> &cows, mt19937 &probabilityEngine, Illness &illne
 					{
 						double distanceFactor = 1.0 + (experimentNum >= 3 ? ((1.0 - (distance / illness.infectionRange)) / 4.0) : 0.0);
 
-						auto prob = illness.infectionRate * distanceFactor * cow2.infectionImmunity;
+						auto prob = illness.infectionRate * distanceFactor;
 						bernoulli_distribution probabilityDist(prob > 1.0 ? 1.0 : prob);
 						if (probabilityDist(probabilityEngine))
 						{
-							cow2.state = State::Infectious;
-							cow2.infectionTime = illness.infectionDuration;
+							if (experimentNum != 4)
+							{
+								cow2.state = State::Infectious;
+								cow2.infectionTime = illness.infectionDuration;
+							}
+							else
+							{
+								cow2.state = State::Exposed;
+								Distribution expositionDist(1, 86400);
+								cow2.incubationTime = expositionDist(probabilityEngine);
+							}
 						}
 					}
 				}
@@ -408,6 +414,18 @@ bool spreadDisease(vector<Cow> &cows, mt19937 &probabilityEngine, Illness &illne
 			else
 			{
 				areAllRemoved = false;
+			}
+		}
+		else if (cow1.state == State::Exposed)
+		{
+			if (cow1.incubationTime == 0)
+			{
+				cow1.state = State::Infectious;
+				cow1.infectionTime = illness.infectionDuration;
+			}
+			else
+			{
+				cow1.incubationTime--;
 			}
 		}
 		else if (cow1.state == State::Susceptible)
@@ -527,10 +545,6 @@ void experiment(const char *inputFile)
 					Distribution yDist(0, 1750);
 					auto yGen = bind(yDist, yEngine);
 
-					mt19937 immunityEngine(get_seed());
-					Distribution immunityDist(0, 2000);
-					auto immunityGen = bind(immunityDist, immunityEngine);
-
 					mt19937 speedEngine(get_seed());
 					Distribution speedDist(11, 23);
 					auto speedGen = bind(speedDist, speedEngine);
@@ -559,7 +573,7 @@ void experiment(const char *inputFile)
 					unsigned int durationInSec = def.duration * 60 * 60;
 					for (size_t i = 0; i < def.repetitions; i++)
 					{
-						initialize(cows, xGen, yGen, immunityGen, def.experimentNum);
+						initialize(cows, xGen, yGen);
 						cows[0].state = State::Infectious;
 						cows[0].infectionTime = illness.infectionDuration;
 						Clock clock;
