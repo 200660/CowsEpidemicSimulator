@@ -391,7 +391,7 @@ bool spreadDisease(vector<Cow> &cows, mt19937 &probabilityEngine, Illness &illne
 							else
 							{
 								cow2.state = State::Exposed;
-								Distribution expositionDist(1, 86400);
+								Distribution expositionDist(1800, 7200);
 								cow2.incubationTime = expositionDist(probabilityEngine);
 							}
 						}
