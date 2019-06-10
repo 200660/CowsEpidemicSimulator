@@ -362,7 +362,7 @@ double getDistance(Cow &cow1, Cow &cow2)
 
 bool spreadDisease(vector<Cow> &cows, mt19937 &probabilityEngine, Illness &illness, int experimentNum)
 {
-	bool areAllRemoved = true;
+	bool areAnyInfectious = false;
 	bernoulli_distribution recoverProbDist(illness.recoverRate);
 
 	for (auto &cow1 : cows)
@@ -377,9 +377,10 @@ bool spreadDisease(vector<Cow> &cows, mt19937 &probabilityEngine, Illness &illne
 					cow2.isInRange = true;
 					if ((cow2.exposition >= 10) or (experimentNum == 1))
 					{
-						double distanceFactor = 1.0 + (experimentNum >= 3 ? ((1.0 - (distance / illness.infectionRange)) / 4.0) : 0.0);
+						// additional coefficient in E3 (1.0 - (distance / illness.infectionRange)) / 4.0
+						double distanceCoefficient = 1.0 + (experimentNum >= 3 ? ((1.0 - (distance / illness.infectionRange)) / 4.0) : 0.0);
 
-						auto prob = illness.infectionRate * distanceFactor;
+						auto prob = illness.infectionRate * distanceCoefficient;
 						bernoulli_distribution probabilityDist(prob > 1.0 ? 1.0 : prob);
 						if (probabilityDist(probabilityEngine))
 						{
@@ -413,7 +414,7 @@ bool spreadDisease(vector<Cow> &cows, mt19937 &probabilityEngine, Illness &illne
 			}
 			else
 			{
-				areAllRemoved = false;
+				areAnyInfectious = true;
 			}
 		}
 		else if (cow1.state == State::Exposed)
@@ -427,10 +428,6 @@ bool spreadDisease(vector<Cow> &cows, mt19937 &probabilityEngine, Illness &illne
 			{
 				cow1.incubationTime--;
 			}
-		}
-		else if (cow1.state == State::Susceptible)
-		{
-			areAllRemoved = false;
 		}
 	}
 
@@ -450,7 +447,7 @@ bool spreadDisease(vector<Cow> &cows, mt19937 &probabilityEngine, Illness &illne
 		}
 	}
 
-	return areAllRemoved;
+	return areAnyInfectious;
 }
 
 void prepareOutput(ExperimentData &def, SingleResults &results)
@@ -467,7 +464,7 @@ void prepareOutput(ExperimentData &def, SingleResults &results)
 
 	if (types.size() == 1) // single line - one data serie
 	{
-		def.results[State::Infectious][def.params[types[0]].current].push_back((results[State::Infectious] + results[State::Removed]) / cowsNum);
+		def.results[State::Infectious][def.params[types[0]].current].push_back(results[State::Infectious] / cowsNum);
 		def.results[State::Recovered][def.params[types[0]].current].push_back(results[State::Recovered] / cowsNum);
 		def.results[State::Removed][def.params[types[0]].current].push_back(results[State::Removed] / cowsNum);
 	}
@@ -479,13 +476,13 @@ void prepareOutput(ExperimentData &def, SingleResults &results)
 		auto diff1 = set1.end - set1.begin;
 		if ((set0.inc / diff0) < (set1.inc / diff1))
 		{
-			def.results[State::Infectious][set0.current].push_back((results[State::Infectious] + results[State::Removed]) / cowsNum);
+			def.results[State::Infectious][set0.current].push_back(results[State::Infectious] / cowsNum);
 			def.results[State::Recovered][set0.current].push_back(results[State::Recovered] / cowsNum);
 			def.results[State::Removed][set0.current].push_back(results[State::Removed] / cowsNum);
 		}
 		else
 		{
-			def.results[State::Infectious][set1.current].push_back((results[State::Infectious] + results[State::Removed]) / cowsNum);
+			def.results[State::Infectious][set1.current].push_back(results[State::Infectious] / cowsNum);
 			def.results[State::Recovered][set1.current].push_back(results[State::Recovered] / cowsNum);
 			def.results[State::Removed][set1.current].push_back(results[State::Removed] / cowsNum);
 		}
@@ -567,6 +564,7 @@ void experiment(const char *inputFile)
 
 					vector<Cow> cows(def.params[Type::Cows].current);
 					SingleResults results = {
+						{State::Exposed, 0.0},
 						{State::Infectious, 0.0},
 						{State::Recovered, 0.0},
 						{State::Removed, 0.0}};
@@ -592,8 +590,16 @@ void experiment(const char *inputFile)
 #endif
 							}
 
-							if (spreadDisease(cows, probabilityEngine, illness, def.experimentNum))
+							if (!spreadDisease(cows, probabilityEngine, illness, def.experimentNum))
 							{
+								int a = 0;
+								for (auto &cow : cows)
+								{
+									if (cow.state == State::Susceptible)
+										a++;
+								}
+								cout << "Epidemy stopped at " << clock.to_string() << " with " << a << "suvivors and P = " << def.params[Type::InfRate].current << endl;
+
 								break;
 							}
 
