@@ -3,11 +3,6 @@ project(CowsTracker VERSION 0.1.0)
 
 add_compile_options(-Wall -Wextra -g -D_GLIBCXX_DEBUG)
 
-set(Boost_USE_STATIC_LIBS ON) 
-set(Boost_USE_MULTITHREADED ON)  
-set(Boost_USE_STATIC_RUNTIME OFF) 
-find_package(Boost 1.45.0 COMPONENTS iostreams system filesystem)
-
 set(MYSQLCONNECTORCPP_ROOT_DIR
         "${MYSQLCONNECTORCPP_ROOT_DIR}"
         CACHE
@@ -45,11 +40,8 @@ if(MYSQLCONNECTORCPP_FOUND)
     mark_as_advanced(MYSQLCONNECTORCPP_ROOT_DIR)
 endif()
 
-if(Boost_FOUND)
-    include_directories(${Boost_INCLUDE_DIRS} /usr/local/include/igraph/) 
-	add_executable(CowsTracker main.cpp)
-	target_link_libraries(CowsTracker igraph ${Boost_LIBRARIES} ${MYSQLCONNECTORCPP_LIBRARY})
-endif()
+add_executable(CowsTracker main.cpp)
+target_link_libraries(CowsTracker ${MYSQLCONNECTORCPP_LIBRARY})
 
 set(CPACK_PROJECT_NAME ${PROJECT_NAME})
 set(CPACK_PROJECT_VERSION ${PROJECT_VERSION})
