@@ -149,6 +149,8 @@ struct ExperimentData
 	unsigned int experimentNum;
 	unsigned int duration;
 	unsigned int repetitions;
+	unsigned int x;
+	unsigned int y;
 	map<Type, Parameter> params;
 	Results results;
 
@@ -169,6 +171,10 @@ struct ExperimentData
 		duration = stoi(tmp);
 		data >> tmp;
 		repetitions = stoi(tmp);
+		data >> tmp;
+		x = stoi(tmp);
+		data >> tmp;
+		y = stoi(tmp);
 
 		int incCouter = 0;
 		data >> tmp;
@@ -276,24 +282,48 @@ void line(const Point &start, const Point &target, vector<Point> &way)
 	}
 }
 
-void initialize(vector<Cow> &cows, Generator &xGen, Generator &yGen)
+void initialize(vector<Cow> &cows, Generator &areaGen, double x, mt19937 &xEngine, double y, mt19937 &yEngine)
 {
 	for (unsigned i = 0; i < cows.size(); i++)
 	{
-		cows[i].position.first = xGen();
-		cows[i].position.second = yGen();
-		cows[i].target.first = xGen();
-		cows[i].target.second = yGen();
+		auto area = areaGen();
+		if (area < 35000)
+		{ // trawa
+			Distribution xDist(0, (0.5 * x) - 1);
+			Distribution yDist(0, 0.05 * y);
+			cows[i].position.first = xDist(xEngine);
+			cows[i].position.second = yDist(yEngine);
+			cows[i].target.first = xDist(xEngine);
+			cows[i].target.second = yDist(yEngine);
+		}
+		else if (area >= 35000 and area < 70000)
+		{ // woda
+			Distribution xDist(0.5 * x, x);
+			Distribution yDist(0, 0.05 * y);
+			cows[i].position.first = xDist(xEngine);
+			cows[i].position.second = yDist(yEngine);
+			cows[i].target.first = xDist(xEngine);
+			cows[i].target.second = yDist(yEngine);
+		}
+		else
+		{ // pozostały teren
+			Distribution xDist(0, x);
+			Distribution yDist((0.05 * y) + 1, y);
+			cows[i].position.first = xDist(xEngine);
+			cows[i].position.second = yDist(yEngine);
+			cows[i].target.first = xDist(xEngine);
+			cows[i].target.second = yDist(yEngine);
+		}
 		line(cows[i].position, cows[i].target, cows[i].way);
 	}
 }
 
 #ifdef SHOULD_DRAW
-void moveCows(vector<Cow> &cows, Generator &xGen, Generator &yGen,
+void moveCows(vector<Cow> &cows, Generator &areaGen, double x, mt19937 &xEngine, double y, mt19937 &yEngine,
 			  Generator &speedGen, Generator &speedInfectedGen,
 			  Generator &stayGen, Generator &stayInfectedGen, string &command)
 #else
-void moveCows(vector<Cow> &cows, Generator &xGen, Generator &yGen,
+void moveCows(vector<Cow> &cows, Generator &areaGen, double x, mt19937 &xEngine, double y, mt19937 &yEngine,
 			  Generator &speedGen, Generator &speedInfectedGen,
 			  Generator &stayGen, Generator &stayInfectedGen)
 #endif
@@ -307,8 +337,28 @@ void moveCows(vector<Cow> &cows, Generator &xGen, Generator &yGen,
 
 		if (cows[i].target == cows[i].position)
 		{
-			cows[i].target.first = xGen();
-			cows[i].target.second = yGen();
+			auto area = areaGen();
+			if (area < 40000)
+			{ // trawa
+				Distribution xDist(0, (0.5 * x) - 1);
+				Distribution yDist(0, 0.05 * y);
+				cows[i].target.first = xDist(xEngine);
+				cows[i].target.second = yDist(yEngine);
+			}
+			else if (area >= 40000 and area < 80000)
+			{ // woda
+				Distribution xDist(0.5 * x, x);
+				Distribution yDist(0, 0.05 * y);
+				cows[i].target.first = xDist(xEngine);
+				cows[i].target.second = yDist(yEngine);
+			}
+			else
+			{ // pozostały teren
+				Distribution xDist(0, x);
+				Distribution yDist((0.05 * y) + 1, y);
+				cows[i].target.first = xDist(xEngine);
+				cows[i].target.second = yDist(yEngine);
+			}
 			cows[i].way.clear();
 			cows[i].waypoint = 0;
 			line(cows[i].position, cows[i].target, cows[i].way);
@@ -534,13 +584,12 @@ void experiment(const char *inputFile)
 				{
 					Illness illness(def.params[Type::InfRate].current, def.params[Type::RecRate].current, def.params[Type::InfRange].current);
 
-					mt19937 xEngine(get_seed());
-					Distribution xDist(0, 4000);
-					auto xGen = bind(xDist, xEngine);
+					mt19937 areaEngine(get_seed());
+					Distribution areaDist(0, 100000);
+					auto areaGen = bind(areaDist, areaEngine);
 
+					mt19937 xEngine(get_seed());
 					mt19937 yEngine(get_seed());
-					Distribution yDist(0, 1750);
-					auto yGen = bind(yDist, yEngine);
 
 					mt19937 speedEngine(get_seed());
 					Distribution speedDist(11, 23);
@@ -558,8 +607,8 @@ void experiment(const char *inputFile)
 
 #ifdef SHOULD_DRAW
 					Gnuplot gp;
-					gp << "set xrange [0:4000]\n";
-					gp << "set yrange [0:1750]\n";
+					gp << "set xrange [0:" + to_string(def.x) + "]\n";
+					gp << "set yrange [0:" + to_string(def.y) + "]\n";
 #endif
 
 					vector<Cow> cows(def.params[Type::Cows].current);
@@ -571,7 +620,7 @@ void experiment(const char *inputFile)
 					unsigned int durationInSec = def.duration * 60 * 60;
 					for (size_t i = 0; i < def.repetitions; i++)
 					{
-						initialize(cows, xGen, yGen);
+						initialize(cows, areaGen, def.x, xEngine, def.y, yEngine);
 						cows[0].state = State::Infectious;
 						cows[0].infectionTime = illness.infectionDuration;
 						Clock clock;
@@ -584,9 +633,9 @@ void experiment(const char *inputFile)
 							if (!clock.isSleepTime())
 							{
 #ifdef SHOULD_DRAW
-								moveCows(cows, xGen, yGen, speedGen, speedInfectedGen, stayGen, stayInfectedGen, command);
+								moveCows(cows, areaGen, def.x, xEngine, def.y, yEngine, speedGen, speedInfectedGen, stayGen, stayInfectedGen, command);
 #else
-								moveCows(cows, xGen, yGen, speedGen, speedInfectedGen, stayGen, stayInfectedGen);
+								moveCows(cows, areaGen, def.x, xEngine, def.y, yEngine, speedGen, speedInfectedGen, stayGen, stayInfectedGen);
 #endif
 							}
 
@@ -598,8 +647,7 @@ void experiment(const char *inputFile)
 									if (cow.state == State::Susceptible)
 										a++;
 								}
-								cout << "Epidemy stopped at " << clock.to_string() << " with " << a << "suvivors and P = " << def.params[Type::InfRate].current << endl;
-
+								//cout << "Epidemy stopped at " << clock.to_string() << " with " << a << "suvivors and P = " << def.params[Type::InfRate].current << endl;
 								break;
 							}
 
